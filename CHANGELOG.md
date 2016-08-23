@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## ??? (??/??/??)
+
+_TODO: word this better_
+
+* single server, multiple workers
+* removed stateful client commands (see commit message 488eb5)
+* renamed `alda start`, `alda stop` and `alda restart` to `alda start-server`, `alda stop-server` and `alda restart-server`. Recommending that people use `alda up`, `alda down` and `alda downup`. The reason for this renaming is that `alda stop` will eventually be a command you can use to stop playback (but keep the server running).
+* actually, got rid of `alda stop` and `alda restart`?
+  * btw, TODO: remove these commands from the client.
+  * oh, and figure out how to shut down servers/workers if/when the user needs to
+
 ## 1.0.0-rc34 (8/23/16)
 
 * This release adds a few safeguards against inadvertently starting more than one server process for the same port and ending up in a situation where you have potentially many Alda server processes hanging around, only one of which will be able to serve on that port. Thanks to [elyisgreat] for reporting this issue ([#258](https://github.com/alda-lang/alda/issues/258)).
