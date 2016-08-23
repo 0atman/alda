@@ -135,7 +135,7 @@ public class AldaServer {
     boolean serverAlreadyUp = checkForConnection();
     if (serverAlreadyUp) {
       msg("Server already up.");
-      return;
+      System.exit(1);
     }
 
     boolean serverAlreadyTryingToStart;
