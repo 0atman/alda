@@ -4,12 +4,15 @@
                     "server/grammar" "examples" "resources"}
   :dependencies '[
                   ; dev
-                  [adzerk/bootlaces      "0.1.12" :scope "test"]
-                  [adzerk/boot-jar2bin   "1.1.0"  :scope "test"]
-                  [adzerk/boot-test      "1.0.4"  :scope "test"]
-                  [str-to-argv           "0.1.0"  :score "test"]
+                  [adzerk/bootlaces    "0.1.12" :scope "test"]
+                  [adzerk/boot-jar2bin "1.1.0"  :scope "test"]
+                  [adzerk/boot-test    "1.0.4"  :scope "test"]
+                  [str-to-argv         "0.1.0"  :score "test"]
 
-                  ; server
+                  ; shared
+                  [org.zeromq/jeromq "0.3.3"]
+
+                  ; server / worker
                   [org.clojure/clojure    "1.8.0"]
                   [instaparse             "1.4.1"]
                   [io.aviso/pretty        "0.1.20"]
@@ -19,20 +22,18 @@
                   [jline                  "2.12.1"]
                   [org.clojars.sidec/jsyn "16.7.3"]
                   [potemkin               "0.4.1"]
-                  [cc.qbits/jilch         "0.3.0"]
+                  [org.zeromq/cljzmq      "0.1.4" :exclusions (org.zeromq/jzmq)]
                   [str-to-argv            "0.1.0"]
 
                   ; client
                   [com.beust/jcommander                 "1.48"]
                   [net.jodah/recurrent                  "0.4.0"]
-                  [org.jeromq/jeromq                    "0.2.0"]
                   [commons-io/commons-io                "2.5"]
                   [org.apache.commons/commons-lang3     "3.4"]
                   [org.apache.httpcomponents/httpclient "4.5.1"]
                   [com.google.code.gson/gson            "2.6.1"]
                   [org.fusesource.jansi/jansi           "1.11"]
-                  [us.bpsm/edn-java                     "0.4.6"]
-                  ])
+                  [us.bpsm/edn-java                     "0.4.6"]])
 
 (require '[adzerk.bootlaces    :refer :all]
          '[adzerk.boot-jar2bin :refer :all]
@@ -169,9 +170,10 @@
    Take care to include the --port long option as well, so the client knows
    the port on which the dev server is running.
 
-   There is a middleware that reloads all the server namespaces before each
-   request, so that the server does not need to be restarted after making
-   changes."
+   *** WORKER ***
+
+   Starts a worker process that will receive requests from the socket on the
+   port specified by the -p/--port option. This option is required."
   [a app              APP  str  "The Alda application to run (server, repl or client)."
    x args             ARGS str  "The string of CLI args to pass to the client."
    p port             PORT int  "The port on which to start the server."
@@ -185,6 +187,13 @@
                              (require 'alda.util)
                              ((resolve 'alda.util/set-timbre-level!) :debug)
                              ((resolve 'alda.server/start-server!) (or port 27713)))
+            start-worker!  (fn []
+                             (assert port
+                               "The --port option is mandatory for workers.")
+                             (require 'alda.worker)
+                             (require 'alda.util)
+                             ((resolve 'alda.util/set-timbre-level!) :debug)
+                             ((resolve 'alda.worker/start-worker!) port))
             start-repl!    (fn []
                              (require 'alda.repl)
                              ((resolve 'alda.repl/start-repl!)))
@@ -203,6 +212,7 @@
         (case app
           nil      (start-server!)
           "server" (start-server!)
+          "worker" (start-worker!)
           "repl"   (start-repl!)
           "client" (run-client!)
           (do
