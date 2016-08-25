@@ -204,11 +204,12 @@
     (.scheduleCommand engine ts cmd)))
 
 (defn schedule-events!
-  [events score audio-ctx playing? done?]
+  [events score audio-ctx playing? wait]
   (let [{:keys [instruments]} score
         engine (:synthesis-engine @audio-ctx)
         begin  (.getCurrentTime ^SynthesisEngine engine)
-        end!   #(when @playing? (reset! done? true))]
+        ; bug? this could cause infinite blocking if @playing? is false
+        end!   #(when @playing? (deliver wait :done))]
     (pdoseq-block [{:keys [offset instrument duration] :as event} events]
       (let [inst   (-> instrument instruments)
             start! #(when @playing?
@@ -226,12 +227,6 @@
     (schedule-event! engine (+ begin
                                (/ (score-length events) 1000.0)
                                1) end!)))
-
-(defn clean-up-when-done!
-  [done? score audio-ctx audio-types]
-  (while (not @done?)
-    (Thread/sleep 250))
-  (tear-down! audio-ctx audio-types score))
 
 (defn play!
   "Plays an Alda score, optionally from given start/end marks determined by
@@ -255,7 +250,7 @@
         _           (set-up! audio-ctx audio-types score)
         _           (refresh! audio-ctx audio-types score)
         playing?    (atom true)
-        done?       (atom false)
+        wait        (promise)
         _           (log/debug "Determining events to schedule...")
         events      (if event-set
                       (let [earliest (->> (map :offset event-set)
@@ -267,13 +262,13 @@
                             [start end] (start-finish-times *play-opts*
                                                             markers)]
                         (shift-events event-set start end)))
-        clean-up    #(clean-up-when-done! done? score audio-ctx audio-types)]
+        clean-up    #(tear-down! audio-ctx audio-types score)]
     (log/debug "Scheduling events...")
-    (schedule-events! events score audio-ctx playing? done?)
-    (when one-off?
-      (if async?
-        (future (clean-up))
-        (clean-up)))
+    (schedule-events! events score audio-ctx playing? wait)
+    (cond
+      (and one-off? async?)       (future @wait (clean-up))
+      (and one-off? (not async?)) (do @wait (clean-up))
+      (not async?)                @wait)
     #(reset! playing? false)))
 
 (defn make-wav!

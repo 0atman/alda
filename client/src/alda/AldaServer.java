@@ -259,7 +259,12 @@ public class AldaServer {
     if (to != null) {
       req.options.to = to;
     }
-    AldaServerResponse res = req.send();
+    // play requests need to be sent exactly once and not retried, otherwise
+    // the score could be played more than once.
+    //
+    // FIXME - implement "worker status" system so the client can poll to see
+    // if the worker is handling its request
+    AldaServerResponse res = req.send(0, 0);
 
     if (res.success) {
       msg(res.body);

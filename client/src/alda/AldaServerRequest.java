@@ -2,11 +2,11 @@ package alda;
 
 import com.google.gson.Gson;
 
-import org.jeromq.ZContext;
-import org.jeromq.ZMQ;
-import org.jeromq.ZMQ.PollItem;
-import org.jeromq.ZMQ.Poller;
-import org.jeromq.ZMQ.Socket;
+import org.zeromq.ZContext;
+import org.zeromq.ZMQ;
+import org.zeromq.ZMQ.PollItem;
+import org.zeromq.ZMQ.Poller;
+import org.zeromq.ZMQ.Socket;
 
 public class AldaServerRequest {
   private final static int REQUEST_TIMEOUT = 2500; //  ms
@@ -31,7 +31,7 @@ public class AldaServerRequest {
 
   private String sendRequest(String req, ZContext ctx, Socket client, int timeout, int retries)
     throws ServerResponseException {
-    if (retries <= 0 || Thread.currentThread().isInterrupted()) {
+    if (retries < 0 || Thread.currentThread().isInterrupted()) {
       ctx.destroy();
       throw new ServerResponseException("Alda server is down. To start the server, run `alda up`.");
     }

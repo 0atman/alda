@@ -11,9 +11,7 @@
 
 (defn start-alda-environment!
   []
-  (midi/fill-midi-synth-pool!)
-  (while (not (midi/midi-synth-available?))
-    (Thread/sleep 250)))
+  (midi/open-midi-synth!))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -33,6 +31,8 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(def playing? (atom false))
+
 (defn handle-code
   [code]
   (try
@@ -46,7 +46,11 @@
                        nil))]
       (do
         (log/debug "Playing score...")
-        (now/play-score! score)
+        (future
+          (reset! playing? true)
+          (now/play-score! score {:async? false :one-off? false})
+          (log/debug "Done playing score.")
+          (reset! playing? false))
         (success-response "Playing..."))
       (error-response "Invalid Alda syntax."))
     (catch Throwable e
@@ -136,7 +140,7 @@
                  (reset! running? false))
                (log/errorf "Unrecognized signal: %s" signal))))
 
-         (when (zmq/check-poller poller 0 :pollin)
+         (when (and (zmq/check-poller poller 0 :pollin) (not @playing?))
            (log/debug "Receiving request...")
            (let [req (zmq/receive-str work)]
              (log/debug "Request received.")
