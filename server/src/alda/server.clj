@@ -1,8 +1,9 @@
 (ns alda.server
-  (:require [zeromq.device   :as zmqd]
-            [zeromq.zmq      :as zmq]
-            [taoensso.timbre :as log])
-  (:import [java.net ServerSocket]))
+  (:require [taoensso.timbre :as log]
+            [zeromq.device   :as zmqd]
+            [zeromq.zmq      :as zmq])
+  (:import [java.net ServerSocket]
+           [org.zeromq ZMQException ZMQ$Error]))
 
 (defn- find-open-port
   []
@@ -15,22 +16,40 @@
   ([frontend-port]
    (start-server! frontend-port (find-open-port)))
   ([frontend-port backend-port]
+   (start-server! frontend-port backend-port (find-open-port)))
+  ([frontend-port backend-port control-port]
    (let [zmq-ctx (zmq/zcontext)]
-     (log/infof "Starting Alda zmq routing server on port %s..." frontend-port)
-     (log/infof "Starting Alda zmq dealing server on port %s..." backend-port)
+     (log/infof "Binding router socket on port %s..." frontend-port)
+     (log/infof "Binding dealer socket on port %s..." backend-port)
+     (log/infof "Binding worker control pub socket on port %s..." control-port)
      (with-open [frontend (doto (zmq/socket zmq-ctx :router)
                             (zmq/bind (str "tcp://*:" frontend-port)))
                  backend  (doto (zmq/socket zmq-ctx :dealer)
-                            (zmq/bind (str "tcp://*:" backend-port)))]
-       (log/info "Proxying requests...")
-       ; proxies requests until the end of time
-       (zmqd/proxy zmq-ctx frontend backend)
+                            (zmq/bind (str "tcp://*:" backend-port)))
+                 control  (doto (zmq/socket zmq-ctx :pub)
+                            (zmq/bind (str "tcp://*:" control-port)))]
+       (.addShutdownHook (Runtime/getRuntime)
+         (Thread. (fn []
+                    (log/info "Interrupt (e.g. Ctrl-C) received.")
 
-       ; if/when the current context is closed, clean up and exit
-       (log/info "Cleaning up...")
-       (zmq/destroy-socket frontend)
-       (zmq/destroy-socket backend)
-       (zmq/destroy zmq-ctx)
-       (log/info "Exiting...")
+                    (log/info "Murdering workers...")
+                    (zmq/send-str control "KILL")
+
+                    (log/info "Destroying zmq context...")
+                    (zmq/destroy zmq-ctx)
+
+                    (try
+                      ((.interrupt (. Thread currentThread))
+                       (.join (. Thread currentThread)))
+                      (catch InterruptedException e)))))
+       (log/info "Proxying requests...")
+       ; proxies requests until the end of time (or until interrupted)
+       (try
+         (zmqd/proxy zmq-ctx frontend backend)
+         (catch ZMQException e
+           (when (= (.getErrorCode e) (.. ZMQ$Error ETERM getCode))
+             (.. Thread currentThread interrupt))))
+
+       (log/info "Exiting.")
        (System/exit 0)))))
 

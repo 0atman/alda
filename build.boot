@@ -174,10 +174,12 @@
 
    Starts a worker process that will receive requests from the socket on the
    port specified by the -p/--port option. This option is required."
-  [a app              APP  str  "The Alda application to run (server, repl or client)."
-   x args             ARGS str  "The string of CLI args to pass to the client."
-   p port             PORT int  "The port on which to start the server."
-   F alda-fingerprint      bool "Allow the Alda client to identify this as an Alda server."]
+  [a app              APP     str  "The Alda application to run (server, repl or client)."
+   x args             ARGS    str  "The string of CLI args to pass to the client."
+   p port             PORT    int  "The port on which to start the server."
+   W work-port        WORK    int  "The port from which the worker gets its work."
+   C control-port     CONTROL int  "The port from which the worker gets control signals."
+   F alda-fingerprint         bool "Allow the Alda client to identify this as an Alda server."]
   (comp
     (if (= app "client") (javac) identity)
     (with-pre-wrap fs
@@ -188,12 +190,15 @@
                              ((resolve 'alda.util/set-timbre-level!) :debug)
                              ((resolve 'alda.server/start-server!) (or port 27713)))
             start-worker!  (fn []
-                             (assert port
-                               "The --port option is mandatory for workers.")
+                             (assert work-port
+                               "The --work-port option is mandatory for workers.")
+                             (assert control-port
+                               "The --control-port option is mandatory for workers.")
                              (require 'alda.worker)
                              (require 'alda.util)
                              ((resolve 'alda.util/set-timbre-level!) :debug)
-                             ((resolve 'alda.worker/start-worker!) port))
+                             ((resolve 'alda.worker/start-worker!) work-port
+                                                                   control-port))
             start-repl!    (fn []
                              (require 'alda.repl)
                              ((resolve 'alda.repl/start-repl!)))

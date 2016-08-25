@@ -106,28 +106,51 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn start-worker!
-  [port]
-  (log/info "Loading Alda environment...")
-  (start-alda-environment!)
-  (log/infof
-    "Worker reporting for duty! Connecting to zmq socket on port %d..."
-    port)
-  (let [zmq-ctx (zmq/zcontext)]
-    (with-open [socket (doto (zmq/socket zmq-ctx :rep)
-                         (zmq/connect (str "tcp://*:" port)))]
-      (while (not (.. Thread currentThread isInterrupted))
-        (log/debug "Receiving request...")
-        (let [req (zmq/receive-str socket)]
-          (log/debug "Request received.")
-          (try
-            (let [msg (json/parse-string req true)
-                  _   (log/debug "Processing message...")
-                  res (process msg)]
-              (log/debug "Sending response...")
-              (zmq/send-str socket (json/generate-string res))
-              (log/debug "Response sent."))
-            (catch Throwable e
-              (log/error e e)
-              (zmq/send-str socket (json/generate-string (error-response e)))))))))
-  (System/exit 0))
+  ([dealer-port control-port]
+   (log/info "Loading Alda environment...")
+   (start-alda-environment!)
+   (log/info "Worker reporting for duty!")
+   (log/infof "Connecting to dealer socket on port %d..." dealer-port)
+   (log/infof "Connecting to control socket on port %d..." control-port)
+   (let [zmq-ctx  (zmq/zcontext)
+         poller   (zmq/poller zmq-ctx 2)
+         running? (atom true)]
+     (with-open [work    (doto (zmq/socket zmq-ctx :rep)
+                           (zmq/connect (str "tcp://*:" dealer-port)))
+                 control (doto (zmq/socket zmq-ctx :sub)
+                           (zmq/connect (str "tcp://*:" control-port))
+                           (zmq/subscribe ""))]
+       (zmq/register poller work :pollin)
+       (zmq/register poller control :pollin)
+       (while (and @running? (not (.. Thread currentThread isInterrupted)))
+         (log/debug "Polling for messages...")
+         (zmq/poll poller)
+
+         (when (zmq/check-poller poller 1 :pollin)
+           (log/debug "Receiving control signal from server...")
+           (let [signal (zmq/receive-str control)]
+             (log/debug "Signal received.")
+             (if (= signal "KILL")
+               (do
+                 (log/info "Received KILL signal from server.")
+                 (reset! running? false))
+               (log/errorf "Unrecognized signal: %s" signal))))
+
+         (when (zmq/check-poller poller 0 :pollin)
+           (log/debug "Receiving request...")
+           (let [req (zmq/receive-str work)]
+             (log/debug "Request received.")
+             (try
+               (let [msg (json/parse-string req true)
+                     _   (log/debug "Processing message...")
+                     res (process msg)]
+                 (log/debug "Sending response...")
+                 (zmq/send-str work (json/generate-string res))
+                 (log/debug "Response sent."))
+               (catch Throwable e
+                 (log/error e e)
+                 (zmq/send-str work (json/generate-string
+                                      (error-response e)))))))))
+     (log/info "Shutting down.")
+     (System/exit 0))))
 
