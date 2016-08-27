@@ -3,6 +3,7 @@
             [alda.parser     :refer (parse-input)]
             [alda.sound      :refer (*play-opts*)]
             [alda.sound.midi :as    midi]
+            [alda.util       :as    util]
             [alda.version    :refer (-version-)]
             [cheshire.core   :as    json]
             [clojure.pprint  :refer (pprint)]
@@ -111,6 +112,10 @@
 
 (defn start-worker!
   ([dealer-port control-port]
+   (let [log-path (util/alda-home-path "logs" "error.log")]
+     (log/infof "Logging errors to %s" log-path)
+     (util/set-log-level! :error)
+     (util/rolling-log! log-path))
    (log/info "Loading Alda environment...")
    (start-alda-environment!)
    (log/info "Worker reporting for duty!")
@@ -153,8 +158,10 @@
                  (log/debug "Response sent."))
                (catch Throwable e
                  (log/error e e)
+                 (log/info "Sending error response...")
                  (zmq/send-str work (json/generate-string
-                                      (error-response e)))))))))
+                                      (error-response e)))
+                 (log/info "Error response sent.")))))))
      (log/info "Shutting down.")
      (System/exit 0))))
 

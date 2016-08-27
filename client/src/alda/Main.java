@@ -8,7 +8,7 @@ import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
 import com.beust.jcommander.ParameterException;
 
-public class Client {
+public class Main {
 
   public static class FileConverter implements IStringConverter<File> {
     @Override
@@ -43,6 +43,10 @@ public class Client {
     @Parameter(names = {"-t", "--timeout"},
                description = "The number of seconds to wait for a server to start before giving up.")
     public int timeout = 30;
+
+    @Parameter(names = {"-w", "--workers"},
+               description = "The number of worker processes to start")
+    public int numberOfWorkers = 4;
   }
 
   private static class AldaCommand {
@@ -51,12 +55,23 @@ public class Client {
                  hidden = true,
                  description = "Print this help text")
       public boolean help = false;
-
   }
 
-  @Parameters(commandDescription = "Start the Alda server in the foreground.",
+  @Parameters(commandDescription = "Start an Alda server in the foreground.",
               hidden = true)
   private static class CommandServer extends AldaCommand {}
+
+  @Parameters(commandDescription = "Start an Alda worker in the foreground.",
+              hidden = true)
+  private static class CommandWorker extends AldaCommand {
+    @Parameter(names = {"-W", "--work-port"},
+               description = "The port on which to receive work")
+    public int workPort = 27713;
+
+    @Parameter(names = {"-C", "--control-port"},
+               description = "The port on which to receive control signals")
+    public int controlPort;
+  }
 
   @Parameters(commandDescription = "Start an interactive Alda REPL session.")
   private static class CommandRepl extends AldaCommand {}
@@ -140,6 +155,7 @@ public class Client {
     CommandHelp          help          = new CommandHelp();
     CommandUpdate        update        = new CommandUpdate();
     CommandServer        serverCmd     = new CommandServer();
+    CommandWorker        workerCmd     = new CommandWorker();
     CommandRepl          repl          = new CommandRepl();
     CommandStartServer   startServer   = new CommandStartServer();
     CommandStopServer    stopServer    = new CommandStopServer();
@@ -158,6 +174,7 @@ public class Client {
     jc.addCommand("update", update);
 
     jc.addCommand("server", serverCmd);
+    jc.addCommand("worker", workerCmd);
     jc.addCommand("repl", repl);
 
     jc.addCommand("up", startServer, "start-server", "init");
@@ -204,12 +221,20 @@ public class Client {
 
         case "update":
           handleCommandSpecificHelp(jc, "update", update);
-          Util.updateAlda();
+          AldaClient.updateAlda();
           System.exit(0);
 
         case "server":
           handleCommandSpecificHelp(jc, "server", serverCmd);
-          server.upFg();
+          server.upFg(globalOpts.numberOfWorkers);
+          break;
+
+        case "worker":
+          handleCommandSpecificHelp(jc, "worker", workerCmd);
+          AldaWorker worker = new AldaWorker(workerCmd.workPort,
+                                             workerCmd.controlPort);
+
+          worker.upFg();
           break;
 
         case "repl":
@@ -221,7 +246,7 @@ public class Client {
         case "start-server":
         case "init":
           handleCommandSpecificHelp(jc, "up", startServer);
-          server.upBg();
+          server.upBg(globalOpts.numberOfWorkers);
           System.exit(0);
 
         case "down":
@@ -233,12 +258,12 @@ public class Client {
         case "downup":
         case "restart-server":
           handleCommandSpecificHelp(jc, "restart-server", restartServer);
-          server.downUp();
+          server.downUp(globalOpts.numberOfWorkers);
           System.exit(0);
 
         case "list":
           handleCommandSpecificHelp(jc, "list", list);
-          Util.listServers(globalOpts.timeout);
+          AldaClient.listServers(globalOpts.timeout);
           System.exit(0);
 
         case "status":
@@ -248,7 +273,7 @@ public class Client {
 
         case "version":
           handleCommandSpecificHelp(jc, "version", version);
-          System.out.println("Client version: " + Util.version());
+          System.out.println("Client version: " + AldaClient.version());
           System.out.println();
           System.out.println("Server version:");
           server.version();

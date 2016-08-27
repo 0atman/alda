@@ -23,6 +23,7 @@
                   [org.clojars.sidec/jsyn "16.7.3"]
                   [potemkin               "0.4.1"]
                   [org.zeromq/cljzmq      "0.1.4" :exclusions (org.zeromq/jzmq)]
+                  [me.raynes/conch        "0.8.0"]
                   [str-to-argv            "0.1.0"]
 
                   ; client
@@ -71,12 +72,12 @@
   install {:pom "alda/alda"}
 
   jar     {:file "alda.jar"
-           :main 'alda.Client}
+           :main 'alda.Main}
 
   bin     {:jvm-opt jvm-opts}
 
   exe     {:name      'alda
-           :main      'alda.Client
+           :main      'alda.Main
            :version   (exe-version alda.version/-version-)
            :desc      "A music programming language for musicians"
            :copyright "2016 Dave Yarwood et al"
@@ -181,14 +182,16 @@
    C control-port     CONTROL int  "The port from which the worker gets control signals."
    F alda-fingerprint         bool "Allow the Alda client to identify this as an Alda server."]
   (comp
-    (if (= app "client") (javac) identity)
+    (javac)
     (with-pre-wrap fs
       (let [direct-linking (System/getProperty "clojure.compiler.direct-linking")
             start-server!  (fn []
                              (require 'alda.server)
                              (require 'alda.util)
-                             ((resolve 'alda.util/set-timbre-level!) :debug)
-                             ((resolve 'alda.server/start-server!) (or port 27713)))
+                             ((resolve 'alda.util/set-log-level!) :debug)
+                             ((resolve 'alda.server/start-server!)
+                                4 ; workers
+                                (or port 27713)))
             start-worker!  (fn []
                              (assert work-port
                                "The --work-port option is mandatory for workers.")
@@ -196,7 +199,7 @@
                                "The --control-port option is mandatory for workers.")
                              (require 'alda.worker)
                              (require 'alda.util)
-                             ((resolve 'alda.util/set-timbre-level!) :debug)
+                             ((resolve 'alda.util/set-log-level!) :debug)
                              ((resolve 'alda.worker/start-worker!) work-port
                                                                    control-port))
             start-repl!    (fn []
@@ -204,8 +207,8 @@
                              ((resolve 'alda.repl/start-repl!)))
             run-client!    (fn []
                              (require '[str-to-argv])
-                             (import 'alda.Client)
-                             (eval `(alda.Client/main
+                             (import 'alda.Main)
+                             (eval `(alda.Main/main
                                       (into-array String
                                         (str-to-argv/split-args (or ~args ""))))))]
         (when-not (= direct-linking "true")

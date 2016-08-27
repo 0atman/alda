@@ -1,7 +1,10 @@
 (ns alda.util
-  (:require [clojure.string  :as str]
-            [taoensso.timbre :as timbre])
-  (:import (java.io File)))
+  (:require [clojure.string                              :as str]
+            [taoensso.timbre                             :as timbre]
+            [taoensso.timbre.appenders.core              :as appenders]
+            [taoensso.timbre.appenders.3rd-party.rolling :as rolling])
+  (:import (java.io File)
+           (java.nio.file Paths)))
 
  (defmacro while-let
   "Repeatedly executes body while test expression is true. Test
@@ -91,13 +94,51 @@
   (let [[x & xs] (sort xs)]
     (apply <= x (conj (vec xs) (+ x 0.01)))))
 
-(defn set-timbre-level!
+(defn set-log-level!
   ([]
     (timbre/set-level! (if-let [level (System/getenv "TIMBRE_LEVEL")]
                          (keyword (str/replace level #":" ""))
                          :warn)))
   ([level]
     (timbre/set-level! level)))
+
+(defn log-to-file!
+  [filename]
+  (timbre/merge-config!
+    {:appenders {:spit (appenders/spit-appender {:fname filename})}
+     :output-fn (partial timbre/default-output-fn {:stacktrace-fonts {}})}))
+
+(defn rolling-log!
+  [filename]
+  (timbre/merge-config!
+    {:appenders {:spit (rolling/rolling-appender {:path    filename
+                                                  :pattern :weekly})}
+     :output-fn (partial timbre/default-output-fn {:stacktrace-fonts {}})}))
+
+(defn program-path
+  "utility function to get the filename of jar in which this function is invoked
+   (source: http://stackoverflow.com/a/13276993/2338327)"
+  [& [ns]]
+  (-> (or ns (class *ns*))
+      .getProtectionDomain .getCodeSource .getLocation .getPath))
+
+(defn alda-home-path
+  "Returns the path to a folder/file inside the Alda home directory, or the
+   directory itself if no arguments are provided.
+
+   e.g. on a Unix system:
+   (alda-home-path) => ~/.alda
+   (alda-home-path \"logs\" \"error.log\") => ~/.alda/logs/error.log
+
+   e.g. on a Windows system:
+
+   (alda-home-path) => C:\\dave\\.alda
+   (alda-home-path \"logs\" \"error.log\") => C:\\dave\\.alda\\logs\\error.log"
+  [& segments]
+  (->> (cons ".alda" segments)
+       (into-array String)
+       (Paths/get (System/getProperty "user.home"))
+       str))
 
 (defn check-for
   "Checks to see if a given file already exists. If it does, prompts the user
