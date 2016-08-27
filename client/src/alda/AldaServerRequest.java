@@ -59,7 +59,7 @@ public class AldaServerRequest {
     client = ctx.createSocket(ZMQ.REQ);
 
     // Send request again, on new socket
-    return sendRequest(req, ctx, client, retries - 1, timeout);
+    return sendRequest(req, ctx, client, timeout, retries - 1);
   }
 
   private String sendRequest(String req, ZContext ctx, Socket client, int timeout)
@@ -76,7 +76,7 @@ public class AldaServerRequest {
     throws ServerResponseException {
     ZContext ctx = new ZContext();
     Socket client = ctx.createSocket(ZMQ.REQ);
-    String res = sendRequest(this.toJson(), ctx, client, retries, timeout);
+    String res = sendRequest(this.toJson(), ctx, client, timeout, retries);
     return AldaServerResponse.fromJson(res);
   }
 
