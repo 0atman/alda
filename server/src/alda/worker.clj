@@ -8,7 +8,8 @@
             [cheshire.core   :as    json]
             [clojure.pprint  :refer (pprint)]
             [taoensso.timbre :as    log]
-            [zeromq.zmq      :as    zmq]))
+            [zeromq.zmq      :as    zmq])
+  (:import [org.zeromq ZFrame ZMQ ZMsg]))
 
 (defn start-alda-environment!
   []
@@ -111,58 +112,80 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(def ^:const HEARTBEAT-INTERVAL 1000)
+(def ^:const MAX-LIVES          30)
+
+(def lives (atom MAX-LIVES))
+
 (defn start-worker!
-  ([dealer-port control-port]
-   (let [log-path (util/alda-home-path "logs" "error.log")]
-     (log/infof "Logging errors to %s" log-path)
-     (util/set-log-level! :error)
-     (util/rolling-log! log-path))
-   (log/info "Loading Alda environment...")
-   (start-alda-environment!)
-   (log/info "Worker reporting for duty!")
-   (log/infof "Connecting to dealer socket on port %d..." dealer-port)
-   (log/infof "Connecting to control socket on port %d..." control-port)
-   (let [zmq-ctx  (zmq/zcontext)
-         poller   (zmq/poller zmq-ctx 2)
-         running? (atom true)]
-     (with-open [work    (doto (zmq/socket zmq-ctx :rep)
-                           (zmq/connect (str "tcp://*:" dealer-port)))
-                 control (doto (zmq/socket zmq-ctx :sub)
-                           (zmq/connect (str "tcp://*:" control-port))
-                           (zmq/subscribe ""))]
-       (zmq/register poller work :pollin)
-       (zmq/register poller control :pollin)
-       (while (and @running? (not (.. Thread currentThread isInterrupted)))
-         (log/debug "Polling for messages...")
-         (zmq/poll poller)
+  [port]
+  (let [log-path (util/alda-home-path "logs" "error.log")]
+    (log/infof "Logging errors to %s" log-path)
+    (util/set-log-level! :error)
+    (util/rolling-log! log-path))
+  (log/info "Loading Alda environment...")
+  (start-alda-environment!)
+  (log/info "Worker reporting for duty!")
+  (log/infof "Connecting to socket on port %d..." port)
+  (let [zmq-ctx        (zmq/zcontext)
+        poller         (zmq/poller zmq-ctx 1)
+        running?       (atom true)
+        heartbeat-time (+ (System/currentTimeMillis) HEARTBEAT-INTERVAL)]
+    (with-open [socket (doto (zmq/socket zmq-ctx :dealer)
+                         (zmq/connect (str "tcp://*:" port))) ]
+      (log/info "Sending READY signal.")
+      (.send (ZFrame. "READY") socket 0)
 
-         (when (zmq/check-poller poller 1 :pollin)
-           (log/debug "Receiving control signal from server...")
-           (let [signal (zmq/receive-str control)]
-             (log/debug "Signal received.")
-             (if (= signal "KILL")
-               (do
-                 (log/info "Received KILL signal from server.")
-                 (reset! running? false))
-               (log/errorf "Unrecognized signal: %s" signal))))
+      (zmq/register poller socket :pollin)
 
-         (when (and (zmq/check-poller poller 0 :pollin) (not @playing?))
-           (log/debug "Receiving request...")
-           (let [req (zmq/receive-str work)]
-             (log/debug "Request received.")
-             (try
-               (let [msg (json/parse-string req true)
-                     _   (log/debug "Processing message...")
-                     res (process msg)]
-                 (log/debug "Sending response...")
-                 (zmq/send-str work (json/generate-string res))
-                 (log/debug "Response sent."))
-               (catch Throwable e
-                 (log/error e e)
-                 (log/info "Sending error response...")
-                 (zmq/send-str work (json/generate-string
-                                      (error-response e)))
-                 (log/info "Error response sent.")))))))
-     (log/info "Shutting down.")
-     (System/exit 0))))
+      (while (and @running? (not (.. Thread currentThread isInterrupted)))
+        (zmq/poll poller HEARTBEAT-INTERVAL)
+        (if (zmq/check-poller poller 0 :pollin)
+          (when-let [msg (ZMsg/recvMsg socket ZMQ/DONTWAIT)]
+            (cond
+              (= 1 (.size msg))
+              (let [frame (.getFirst msg)
+                    data  (String. (.getData frame))]
+                (case data
+                  "KILL"      (do
+                                (log/info "Received KILL signal from server.")
+                                (reset! running? false))
+                  "HEARTBEAT" (reset! lives MAX-LIVES)
+                  (log/errorf "Invalid message: %s" data)))
+
+              (= 3 (.size msg))
+              (if @playing?
+                (log/debug "Ignoring message. Busy playing.")
+                (let [envelope (-> msg .unwrap)
+                      body     (-> msg .pop .getData (String.))]
+                  (try
+                    (log/debug "Processing message...")
+                    (let [req (json/parse-string body true)
+                          res (json/generate-string (process req))
+                          _   (log/debug "Sending response...")
+                          msg (doto (ZMsg/newStringMsg (into-array String [res]))
+                                (.wrap envelope))]
+                      (.send msg socket false)
+                      (log/debug "Response sent."))
+                    (catch Throwable e
+                      (log/error e e)
+                      (log/info "Sending error response...")
+                      (let [err (json/generate-string (error-response e))
+                            msg (doto (ZMsg/newStringMsg (into-array String [err]))
+                                  (.wrap envelope))]
+                        (.send msg socket false))
+                      (log/info "Error response sent.")))))
+
+              :else
+              (log/errorf "Invalid message: %s" msg)))
+          (do
+            ; (log/debugf "Unable to reach server. Lives left: %d" (dec @lives))
+            (swap! lives dec)
+            (when (zero? @lives)
+              (log/infof "Unable to reach the server.")
+              (reset! running? false))))
+        (when (> (System/currentTimeMillis) heartbeat-time)
+          (.send (ZFrame. (if @playing? "BUSY" "AVAILABLE")) socket 0))))
+    (log/info "Shutting down.")
+    (System/exit 0)))
 

@@ -37,7 +37,7 @@ public class Main {
     public String host = "localhost";
 
     @Parameter(names = {"-p", "--port"},
-               description = "The port of the Alda server")
+               description = "The port of the Alda server/worker")
     public int port = 27713;
 
     @Parameter(names = {"-t", "--timeout"},
@@ -63,15 +63,7 @@ public class Main {
 
   @Parameters(commandDescription = "Start an Alda worker in the foreground.",
               hidden = true)
-  private static class CommandWorker extends AldaCommand {
-    @Parameter(names = {"-W", "--work-port"},
-               description = "The port on which to receive work")
-    public int workPort = 27713;
-
-    @Parameter(names = {"-C", "--control-port"},
-               description = "The port on which to receive control signals")
-    public int controlPort;
-  }
+  private static class CommandWorker extends AldaCommand {}
 
   @Parameters(commandDescription = "Start an interactive Alda REPL session.")
   private static class CommandRepl extends AldaCommand {}
@@ -231,8 +223,7 @@ public class Main {
 
         case "worker":
           handleCommandSpecificHelp(jc, "worker", workerCmd);
-          AldaWorker worker = new AldaWorker(workerCmd.workPort,
-                                             workerCmd.controlPort);
+          AldaWorker worker = new AldaWorker(globalOpts.port);
 
           worker.upFg();
           break;

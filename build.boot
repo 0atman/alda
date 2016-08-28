@@ -177,9 +177,8 @@
    port specified by the -p/--port option. This option is required."
   [a app              APP     str  "The Alda application to run (server, repl or client)."
    x args             ARGS    str  "The string of CLI args to pass to the client."
-   p port             PORT    int  "The port on which to start the server."
-   W work-port        WORK    int  "The port from which the worker gets its work."
-   C control-port     CONTROL int  "The port from which the worker gets control signals."
+   p port             PORT    int  "The port on which to start the server/worker."
+   w workers          WORKERS int  "The number of workers for the server to start."
    F alda-fingerprint         bool "Allow the Alda client to identify this as an Alda server."]
   (comp
     (javac)
@@ -190,18 +189,15 @@
                              (require 'alda.util)
                              ((resolve 'alda.util/set-log-level!) :debug)
                              ((resolve 'alda.server/start-server!)
-                                4 ; workers
+                                (or workers 4)
                                 (or port 27713)))
             start-worker!  (fn []
-                             (assert work-port
-                               "The --work-port option is mandatory for workers.")
-                             (assert control-port
-                               "The --control-port option is mandatory for workers.")
+                             (assert port
+                               "The --port option is mandatory for workers.")
                              (require 'alda.worker)
                              (require 'alda.util)
                              ((resolve 'alda.util/set-log-level!) :debug)
-                             ((resolve 'alda.worker/start-worker!) work-port
-                                                                   control-port))
+                             ((resolve 'alda.worker/start-worker!) port))
             start-repl!    (fn []
                              (require 'alda.repl)
                              ((resolve 'alda.repl/start-repl!)))

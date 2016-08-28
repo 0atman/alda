@@ -12,8 +12,8 @@ public class AldaRequest {
   private final static int REQUEST_TIMEOUT = 2500; //  ms
   private final static int REQUEST_RETRIES = 3;    //  Before we abandon
 
-  private String host;
-  private int port;
+  private transient String host;
+  private transient int port;
 
   public AldaRequest(String host, int port) {
     this.host = host;
