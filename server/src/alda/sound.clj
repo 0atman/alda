@@ -8,11 +8,21 @@
   (:import [com.softsynth.shared.time TimeStamp ScheduledCommand]
            [com.jsyn.engine SynthesisEngine]))
 
+(def ^:dynamic *synthesis-engine* nil)
+
+(defn new-synthesis-engine
+  []
+  (doto (SynthesisEngine.) .start))
+
+(defn start-synthesis-engine!
+  []
+  (alter-var-root #'*synthesis-engine* (constantly (new-synthesis-engine))))
+
 (defn new-audio-context
   []
   (atom
     {:audio-types      #{}
-     :synthesis-engine (doto (SynthesisEngine.) .start)}))
+     :synthesis-engine (or *synthesis-engine* (new-synthesis-engine))}))
 
 (defn set-up?
   [audio-ctx audio-type]

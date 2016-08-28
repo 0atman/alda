@@ -1,7 +1,7 @@
 (ns alda.worker
   (:require [alda.now        :as    now]
             [alda.parser     :refer (parse-input)]
-            [alda.sound      :refer (*play-opts*)]
+            [alda.sound      :as    sound :refer (*play-opts*)]
             [alda.sound.midi :as    midi]
             [alda.util       :as    util]
             [alda.version    :refer (-version-)]
@@ -12,6 +12,7 @@
 
 (defn start-alda-environment!
   []
+  (sound/start-synthesis-engine!)
   (midi/open-midi-synth!))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
