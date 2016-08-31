@@ -1,7 +1,6 @@
 (ns alda.sound
   (:require [alda.sound.midi :as    midi]
-            [alda.util       :refer (check-for
-                                     parse-time
+            [alda.util       :refer (parse-time
                                      pdoseq-block
                                      parse-position)]
             [taoensso.timbre :as    log])
@@ -281,10 +280,3 @@
       (not async?)                @wait)
     #(reset! playing? false)))
 
-(defn make-wav!
-  "Parses an input file and saves the resulting sound data as a wav file,
-   using the specified options."
-  [input-file output-file {:keys [start end]}]
-  (let [target-file (check-for output-file)]
-    ;; TODO
-    nil))

@@ -181,7 +181,6 @@
                 :else
                 (log/errorf "Invalid message: %s" msg)))
             (do
-              ; (log/debugf "Unable to reach server. Lives left: %d" (dec @lives))
               (swap! lives dec)
               (when (zero? @lives)
                 (log/infof "Unable to reach the server.")
