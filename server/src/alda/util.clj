@@ -140,3 +140,46 @@
        (Paths/get (System/getProperty "user.home"))
        str))
 
+(defn queue
+  "A janky custom data structure that acts like a queue and is a ref.
+
+   It's really just a vector wrapped in a ref.
+
+   Items are popped from the left and pushed onto the right."
+  ([]
+   (ref []))
+  ([init]
+   (ref (into [] init))))
+
+(defn push-queue
+  [q x]
+  (dosync
+    (alter q #(conj % x))))
+
+(defn pop-queue
+  [q]
+  (dosync
+    (let [x (first @q)]
+      (alter q #(vec (drop 1 %)))
+      x)))
+
+(defn check-queue
+  "Returns true if there is at least one item in the queue that satisfies the
+   predicate."
+  [q pred]
+  (boolean (some pred @q)))
+
+(defn re-queue
+  "Finds all items in the queue that satisfy the predicate, and re-queues them
+   onto the end of the queue."
+  [q pred]
+  (dosync
+    (alter q #(let [yes (filter pred %)
+                    no  (filter (complement pred) %)]
+                (vec (concat no yes))))))
+
+(defn remove-from-queue
+  "Removes all items from the queue that satisfy the predicate."
+  [q pred]
+  (dosync
+    (alter q #(vec (filter (complement pred) %)))))

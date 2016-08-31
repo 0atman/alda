@@ -11,9 +11,15 @@
 
 (def ^:const HEARTBEAT-INTERVAL 1000)
 
-(def available-workers (ConcurrentLinkedQueue.))
-(def busy-workers      (atom #{}))
-(defn all-workers []   (concat available-workers @busy-workers))
+(def available-workers (util/queue))
+(def busy-workers      (ref #{}))
+(defn all-workers []   (concat @available-workers @busy-workers))
+
+; (doseq [[x y] [[:available available-workers]
+;                [:busy busy-workers]]]
+;   (add-watch y :key (fn [_ _ old new]
+;                       (when (not= old new)
+;                         (prn x new)))))
 
 (def no-workers-available-response
   (json/generate-string
@@ -25,16 +31,19 @@
     {:success false
      :body "All worker processes are currently busy. Please wait until playback is complete and re-submit your request."}))
 
-(defn add-worker-to-queue
+(defn add-or-requeue-worker
   [address]
-  (swap! busy-workers disj address)
-  (.remove available-workers address)
-  (.add available-workers address))
+  (dosync
+    (alter busy-workers disj address)
+    (if (util/check-queue available-workers (partial = address))
+      (util/re-queue available-workers (partial = address))
+      (util/push-queue available-workers address))))
 
 (defn note-that-worker-is-busy
   [address]
-  (.remove available-workers address)
-  (swap! busy-workers conj address))
+  (dosync
+    (util/remove-from-queue available-workers (partial = address))
+    (alter busy-workers conj address)))
 
 (defn- find-open-port
   []
@@ -93,10 +102,10 @@
              (when (zmq/check-poller poller 0 :pollin) ; frontend
                (when-let [msg (ZMsg/recvMsg frontend)]
                  (cond
-                   (not (empty? available-workers))
+                   (not (empty? @available-workers))
                    (do
                      (log/debug "Receiving message from frontend...")
-                     (let [worker (.poll available-workers)]
+                     (let [worker (util/pop-queue available-workers)]
                        (log/debugf "Forwarding message to worker %s..." worker)
                        (.push msg worker)
                        (.send msg backend)))
@@ -128,8 +137,8 @@
                            data    (-> frame .getData (String.))]
                        (case data
                          "BUSY"      (note-that-worker-is-busy address)
-                         "AVAILABLE" (add-worker-to-queue address)
-                         "READY"     (add-worker-to-queue address)))
+                         "AVAILABLE" (add-or-requeue-worker address)
+                         "READY"     (add-or-requeue-worker address)))
                      (do
                        (log/debug "Forwarding backend response to frontend...")
                        (.send msg frontend))))))
