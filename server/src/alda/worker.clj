@@ -129,8 +129,7 @@
   (log/infof "Connecting to socket on port %d..." port)
   (let [zmq-ctx        (zmq/zcontext)
         poller         (zmq/poller zmq-ctx 1)
-        running?       (atom true)
-        heartbeat-time (+ (System/currentTimeMillis) HEARTBEAT-INTERVAL)]
+        running?       (atom true)]
     (with-open [socket (doto (zmq/socket zmq-ctx :dealer)
                          (zmq/connect (str "tcp://*:" port))) ]
       (log/info "Sending READY signal.")
@@ -139,53 +138,56 @@
       (zmq/register poller socket :pollin)
 
       (while (and @running? (not (.. Thread currentThread isInterrupted)))
-        (zmq/poll poller HEARTBEAT-INTERVAL)
-        (if (zmq/check-poller poller 0 :pollin)
-          (when-let [msg (ZMsg/recvMsg socket ZMQ/DONTWAIT)]
-            (cond
-              (= 1 (.size msg))
-              (let [frame (.getFirst msg)
-                    data  (String. (.getData frame))]
-                (case data
-                  "KILL"      (do
-                                (log/info "Received KILL signal from server.")
-                                (reset! running? false))
-                  "HEARTBEAT" (reset! lives MAX-LIVES)
-                  (log/errorf "Invalid message: %s" data)))
+        (let [heartbeat-time (+ (System/currentTimeMillis) HEARTBEAT-INTERVAL)]
+          (zmq/poll poller HEARTBEAT-INTERVAL)
+          (if (zmq/check-poller poller 0 :pollin)
+            (when-let [msg (ZMsg/recvMsg socket ZMQ/DONTWAIT)]
+              (cond
+                (= 1 (.size msg))
+                (let [frame (.getFirst msg)
+                      data  (String. (.getData frame))]
+                  (case data
+                    "KILL"      (do
+                                  (log/info "Received KILL signal from server.")
+                                  (reset! running? false))
+                    "HEARTBEAT" (reset! lives MAX-LIVES)
+                    (log/errorf "Invalid message: %s" data)))
 
-              (= 3 (.size msg))
-              (if @playing?
-                (log/debug "Ignoring message. Busy playing.")
-                (let [envelope (-> msg .unwrap)
-                      body     (-> msg .pop .getData (String.))]
-                  (try
-                    (log/debug "Processing message...")
-                    (let [req (json/parse-string body true)
-                          res (json/generate-string (process req))
-                          _   (log/debug "Sending response...")
-                          msg (doto (ZMsg/newStringMsg (into-array String [res]))
-                                (.wrap envelope))]
-                      (.send msg socket false)
-                      (log/debug "Response sent."))
-                    (catch Throwable e
-                      (log/error e e)
-                      (log/info "Sending error response...")
-                      (let [err (json/generate-string (error-response e))
-                            msg (doto (ZMsg/newStringMsg (into-array String [err]))
+                (= 3 (.size msg))
+                (if @playing?
+                  (log/debug "Ignoring message. Busy playing.")
+                  (let [envelope (-> msg .unwrap)
+                        body     (-> msg .pop .getData (String.))]
+                    (try
+                      (log/debug "Processing message...")
+                      (let [req (json/parse-string body true)
+                            res (json/generate-string (process req))
+                            _   (log/debug "Sending response...")
+                            msg (doto (ZMsg/newStringMsg (into-array String
+                                                           [res]))
                                   (.wrap envelope))]
-                        (.send msg socket false))
-                      (log/info "Error response sent.")))))
+                        (.send msg socket false)
+                        (log/debug "Response sent."))
+                      (catch Throwable e
+                        (log/error e e)
+                        (log/info "Sending error response...")
+                        (let [err (json/generate-string (error-response e))
+                              msg (doto (ZMsg/newStringMsg (into-array String
+                                                             [err]))
+                                    (.wrap envelope))]
+                          (.send msg socket false))
+                        (log/info "Error response sent.")))))
 
-              :else
-              (log/errorf "Invalid message: %s" msg)))
-          (do
-            ; (log/debugf "Unable to reach server. Lives left: %d" (dec @lives))
-            (swap! lives dec)
-            (when (zero? @lives)
-              (log/infof "Unable to reach the server.")
-              (reset! running? false))))
-        (when (> (System/currentTimeMillis) heartbeat-time)
-          (.send (ZFrame. (if @playing? "BUSY" "AVAILABLE")) socket 0))))
+                :else
+                (log/errorf "Invalid message: %s" msg)))
+            (do
+              ; (log/debugf "Unable to reach server. Lives left: %d" (dec @lives))
+              (swap! lives dec)
+              (when (zero? @lives)
+                (log/infof "Unable to reach the server.")
+                (reset! running? false))))
+          (when (> (System/currentTimeMillis) heartbeat-time)
+            (.send (ZFrame. (if @playing? "BUSY" "AVAILABLE")) socket 0)))))
     (log/info "Shutting down.")
     (System/exit 0)))
 
