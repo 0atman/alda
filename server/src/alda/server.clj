@@ -131,7 +131,6 @@
                          "AVAILABLE" (add-worker-to-queue address)
                          "READY"     (add-worker-to-queue address)))
                      (do
-                       (add-worker-to-queue address)
                        (log/debug "Forwarding backend response to frontend...")
                        (.send msg frontend))))))
              (when (> (System/currentTimeMillis) heartbeat-time)
