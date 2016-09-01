@@ -182,8 +182,8 @@
                 (log/errorf "Invalid message: %s" msg)))
             (do
               (swap! lives dec)
-              (when (zero? @lives)
-                (log/infof "Unable to reach the server.")
+              (when (and (<= @lives 0) (not @playing?))
+                (log/error "Unable to reach the server.")
                 (reset! running? false))))
           (when (> (System/currentTimeMillis) heartbeat-time)
             (.send (ZFrame. (if @playing? "BUSY" "AVAILABLE")) socket 0)))))
