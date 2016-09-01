@@ -125,7 +125,8 @@
    (start-server! workers frontend-port (find-open-port)))
   ([workers frontend-port backend-port]
    (let [zmq-ctx        (zmq/zcontext)
-         poller         (zmq/poller zmq-ctx 2)]
+         poller         (zmq/poller zmq-ctx 2)
+         last-heartbeat (atom 0)]
      (log/infof "Binding frontend socket on port %s..." frontend-port)
      (log/infof "Binding backend socket on port %s..." backend-port)
      (with-open [frontend (doto (zmq/socket zmq-ctx :router)
@@ -149,59 +150,60 @@
                       (catch InterruptedException e)))))
        (try
          (while true
-           (let [heartbeat-time (+ (System/currentTimeMillis) HEARTBEAT-INTERVAL)]
-             (zmq/poll poller HEARTBEAT-INTERVAL)
-             (when (zmq/check-poller poller 0 :pollin) ; frontend
-               (when-let [msg (ZMsg/recvMsg frontend)]
-                 (cond
-                   (not (empty? @available-workers))
+           (zmq/poll poller HEARTBEAT-INTERVAL)
+           (when (zmq/check-poller poller 1 :pollin) ; backend
+             (when-let [msg (ZMsg/recvMsg backend)]
+               (let [address (.unwrap msg)]
+                 (if (= 1 (.size msg))
+                   (let [frame   (.getFirst msg)
+                         data    (-> frame .getData (String.))]
+                     (case data
+                       "BUSY"      (note-that-worker-is-busy address)
+                       "AVAILABLE" (add-or-requeue-worker address)
+                       "READY"     (add-or-requeue-worker address)))
                    (do
-                     (log/debug "Receiving message from frontend...")
-                     (let [{:keys [address]}
-                           (dosync (util/pop-queue available-workers))]
-                       (log/debugf "Forwarding message to worker %s..." address)
-                       (.push msg address)
-                       (.send msg backend)))
+                     (log/debug "Forwarding backend response to frontend...")
+                     (.send msg frontend))))))
+           (when (zmq/check-poller poller 0 :pollin) ; frontend
+             (when-let [msg (ZMsg/recvMsg frontend)]
+               (cond
+                 (not (empty? @available-workers))
+                 (do
+                   (log/debug "Receiving message from frontend...")
+                   (let [{:keys [address]}
+                         (dosync (util/pop-queue available-workers))]
+                     (log/debugf "Forwarding message to worker %s..." address)
+                     (.push msg address)
+                     (.send msg backend)))
 
-                   (not (empty? @busy-workers))
-                   (do
-                     (log/debug (str "All workers are currently busy. "
-                                     "Letting the client know..."))
-                     (let [envelope (.unwrap msg)
-                           msg      (doto (ZMsg/newStringMsg
-                                            (into-array String
-                                              [all-workers-are-busy-response]))
-                                      (.wrap envelope))]
-                       (.send msg frontend)))
+                 (not (empty? @busy-workers))
+                 (do
+                   (log/debug (str "All workers are currently busy. "
+                                   "Letting the client know..."))
+                   (let [envelope (.unwrap msg)
+                         msg      (doto (ZMsg/newStringMsg
+                                          (into-array String
+                                                      [all-workers-are-busy-response]))
+                                    (.wrap envelope))]
+                     (.send msg frontend)))
 
-                   :else
-                   (do
-                     (log/debug (str "Workers not ready yet. "
-                                     "Letting the client know..."))
-                     (let [envelope (.unwrap msg)
-                           msg      (doto (ZMsg/newStringMsg
-                                            (into-array String
-                                              [no-workers-available-response]))
-                                      (.wrap envelope))]
-                       (.send msg frontend))))))
-             (when (zmq/check-poller poller 1 :pollin) ; backend
-               (when-let [msg (ZMsg/recvMsg backend)]
-                 (let [address (.unwrap msg)]
-                   (if (= 1 (.size msg))
-                     (let [frame   (.getFirst msg)
-                           data    (-> frame .getData (String.))]
-                       (case data
-                         "BUSY"      (note-that-worker-is-busy address)
-                         "AVAILABLE" (add-or-requeue-worker address)
-                         "READY"     (add-or-requeue-worker address)))
-                     (do
-                       (log/debug "Forwarding backend response to frontend...")
-                       (.send msg frontend))))))
-             (when (> (System/currentTimeMillis) heartbeat-time)
-               (doseq [{:keys [address]} (all-workers)]
-                 (.send address backend (+ ZFrame/REUSE ZFrame/MORE))
-                 (.send (ZFrame. "HEARTBEAT") backend 0)))
-             (fire-lazy-workers)))
+                 :else
+                 (do
+                   (log/debug (str "Workers not ready yet. "
+                                   "Letting the client know..."))
+                   (let [envelope (.unwrap msg)
+                         msg      (doto (ZMsg/newStringMsg
+                                          (into-array String
+                                                      [no-workers-available-response]))
+                                    (.wrap envelope))]
+                     (.send msg frontend))))))
+           (when (> (System/currentTimeMillis)
+                    (+ @last-heartbeat HEARTBEAT-INTERVAL))
+             (reset! last-heartbeat (System/currentTimeMillis))
+             (doseq [{:keys [address]} (all-workers)]
+               (.send address backend (+ ZFrame/REUSE ZFrame/MORE))
+               (.send (ZFrame. "HEARTBEAT") backend 0)))
+           (fire-lazy-workers))
          (catch ZMQException e
            (when (= (.getErrorCode e) (.. ZMQ$Error ETERM getCode))
              (.. Thread currentThread interrupt)))
