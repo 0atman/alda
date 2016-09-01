@@ -9,11 +9,22 @@
            [java.util.concurrent ConcurrentLinkedQueue]
            [org.zeromq ZFrame ZMQException ZMQ$Error ZMsg]))
 
+; the number of ms between heartbeats
 (def ^:const HEARTBEAT-INTERVAL 1000)
+; the amount of missed heartbeats before a worker is pronounced dead
+(def ^:const WORKER-LIVES          3)
+
+(defn worker-expiration-date []
+  (+ (System/currentTimeMillis) (* HEARTBEAT-INTERVAL WORKER-LIVES)))
+
+(defn worker [address]
+  {:address address
+   :expiry  (worker-expiration-date)})
 
 (def available-workers (util/queue))
 (def busy-workers      (ref #{}))
-(defn all-workers []   (concat @available-workers @busy-workers))
+(defn all-workers []   (concat @available-workers (for [address @busy-workers]
+                                                    {:address address})))
 
 ; (doseq [[x y] [[:available available-workers]
 ;                [:busy busy-workers]]]
@@ -35,15 +46,23 @@
   [address]
   (dosync
     (alter busy-workers disj address)
-    (if (util/check-queue available-workers (partial = address))
-      (util/re-queue available-workers (partial = address))
-      (util/push-queue available-workers address))))
+    (if (util/check-queue available-workers #(= address (:address %)))
+      (util/re-queue available-workers
+                     #(= address (:address %))
+                     #(assoc % :expiry (worker-expiration-date)))
+      (util/push-queue available-workers (worker address)))))
 
 (defn note-that-worker-is-busy
   [address]
   (dosync
-    (util/remove-from-queue available-workers (partial = address))
+    (util/remove-from-queue available-workers #(= address (:address %)))
     (alter busy-workers conj address)))
+
+(defn fire-lazy-workers
+  []
+  (dosync
+    (util/remove-from-queue available-workers
+                            #(< (:expiry %) (System/currentTimeMillis)))))
 
 (defn- find-open-port
   []
@@ -87,8 +106,8 @@
                     (log/info "Interrupt (e.g. Ctrl-C) received.")
 
                     (log/info "Murdering workers...")
-                    (doseq [worker (all-workers)]
-                      (.send worker backend (+ ZFrame/REUSE ZFrame/MORE))
+                    (doseq [{:keys [address]} (all-workers)]
+                      (.send address backend (+ ZFrame/REUSE ZFrame/MORE))
                       (.send (ZFrame. "KILL") backend 0))
 
                     (try
@@ -105,9 +124,10 @@
                    (not (empty? @available-workers))
                    (do
                      (log/debug "Receiving message from frontend...")
-                     (let [worker (util/pop-queue available-workers)]
-                       (log/debugf "Forwarding message to worker %s..." worker)
-                       (.push msg worker)
+                     (let [{:keys [address]}
+                           (dosync (util/pop-queue available-workers))]
+                       (log/debugf "Forwarding message to worker %s..." address)
+                       (.push msg address)
                        (.send msg backend)))
 
                    (not (empty? @busy-workers))
@@ -116,7 +136,8 @@
                      (log/debug "Letting the client know...")
                      (let [envelope (.unwrap msg)
                            msg      (doto (ZMsg/newStringMsg
-                                            (into-array String [all-workers-are-busy-response]))
+                                            (into-array String
+                                              [all-workers-are-busy-response]))
                                       (.wrap envelope))]
                        (.send msg frontend)))
 
@@ -126,7 +147,8 @@
                      (log/debug "Letting the client know...")
                      (let [envelope (.unwrap msg)
                            msg      (doto (ZMsg/newStringMsg
-                                            (into-array String [no-workers-available-response]))
+                                            (into-array String
+                                              [no-workers-available-response]))
                                       (.wrap envelope))]
                        (.send msg frontend))))))
              (when (zmq/check-poller poller 1 :pollin) ; backend
@@ -143,9 +165,10 @@
                        (log/debug "Forwarding backend response to frontend...")
                        (.send msg frontend))))))
              (when (> (System/currentTimeMillis) heartbeat-time)
-               (doseq [worker (all-workers)]
-                 (.send worker backend (+ ZFrame/REUSE ZFrame/MORE))
-                 (.send (ZFrame. "HEARTBEAT") backend 0)))))
+               (doseq [{:keys [address]} (all-workers)]
+                 (.send address backend (+ ZFrame/REUSE ZFrame/MORE))
+                 (.send (ZFrame. "HEARTBEAT") backend 0)))
+             (fire-lazy-workers)))
          (catch ZMQException e
            (when (= (.getErrorCode e) (.. ZMQ$Error ETERM getCode))
              (.. Thread currentThread interrupt)))
