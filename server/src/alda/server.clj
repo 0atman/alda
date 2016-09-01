@@ -85,6 +85,41 @@
     (dotimes [_ workers]
       (apply sh/proc cmd))))
 
+(defn supervise-workers
+  "Ensures that there are at least `desired` number of workers available by
+   counting how many we have and starting more if needed."
+  [port desired]
+  (let [current (count (all-workers))
+        needed  (- desired current)]
+    (when (pos? needed)
+      (log/infof "Starting %s more workers..." needed)
+      (start-workers! needed port))))
+
+(def ^:const WORKER-CHECK-INTERVAL 30000)
+
+(def supervising? (atom true))
+
+(defn start-supervisor!
+  [desired-workers worker-port]
+  (future
+    (while @supervising?
+      (try
+        (Thread/sleep WORKER-CHECK-INTERVAL)
+        (log/debugf "WORKERS: %s" (count (all-workers)))
+        (supervise-workers worker-port desired-workers)
+        (catch Throwable e
+          (log/error e e))))))
+
+(defn shut-down!
+  [backend]
+  (log/info "Murdering supervisor...")
+  (reset! supervising? false)
+
+  (log/info "Murdering workers...")
+  (doseq [{:keys [address]} (all-workers)]
+    (.send address backend (+ ZFrame/REUSE ZFrame/MORE))
+    (.send (ZFrame. "KILL") backend 0)))
+
 (defn start-server!
   ([workers frontend-port]
    (start-server! workers frontend-port (find-open-port)))
@@ -101,15 +136,13 @@
        (zmq/register poller backend :pollin)
        (log/infof "Spawning %s workers..." workers)
        (start-workers! workers backend-port)
+       (log/infof "Starting supervisor thread to check on workers every %s ms..."
+                  WORKER-CHECK-INTERVAL)
+       (start-supervisor! workers backend-port)
        (.addShutdownHook (Runtime/getRuntime)
          (Thread. (fn []
                     (log/info "Interrupt (e.g. Ctrl-C) received.")
-
-                    (log/info "Murdering workers...")
-                    (doseq [{:keys [address]} (all-workers)]
-                      (.send address backend (+ ZFrame/REUSE ZFrame/MORE))
-                      (.send (ZFrame. "KILL") backend 0))
-
+                    (shut-down! backend)
                     (try
                       ((.interrupt (. Thread currentThread))
                        (.join (. Thread currentThread)))
@@ -132,8 +165,8 @@
 
                    (not (empty? @busy-workers))
                    (do
-                     (log/debug "All workers are currently busy.")
-                     (log/debug "Letting the client know...")
+                     (log/debug (str "All workers are currently busy. "
+                                     "Letting the client know..."))
                      (let [envelope (.unwrap msg)
                            msg      (doto (ZMsg/newStringMsg
                                             (into-array String
@@ -143,8 +176,8 @@
 
                    :else
                    (do
-                     (log/debug "Workers not ready yet.")
-                     (log/debug "Letting the client know...")
+                     (log/debug (str "Workers not ready yet. "
+                                     "Letting the client know..."))
                      (let [envelope (.unwrap msg)
                            msg      (doto (ZMsg/newStringMsg
                                             (into-array String
